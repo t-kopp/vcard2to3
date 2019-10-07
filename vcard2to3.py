@@ -4,6 +4,7 @@ import sys
 import argparse
 import re
 import quopri
+from functools import partial
 
 class VCard:
     BEGIN = 'BEGIN:VCARD'
@@ -80,7 +81,7 @@ class QuotedPrintableDecoder:
 
 
 class Replacer:
-    def __init__(self):
+    def __init__(self, countrycode):
         self.replace_filters = []
         self.replace_filters.append( (re.compile('^VERSION:.*'), 'VERSION:3.0') )
         #self.replace_filters.append( (re.compile('^PHOTO;ENCODING=BASE64;JPEG:'), 'PHOTO:data:image/jpeg;base64,') ) # Version 4.0
@@ -94,9 +95,18 @@ class Replacer:
         self.replace_filters.append( (re.compile('^(TEL|EMAIL|ADR|IMPP);([^;:=]+[;:])'), Replacer.type_lc) )
         self.replace_filters.append( (re.compile('^EMAIL:([^@]+@jabber.*)'), 'IMPP;xmpp:\\1') )
 
+        if (countrycode):
+            self.replace_filters.append( (re.compile('^(TEL;.*)(:0[1-9])(.*)'), partial(Replacer.type_tel, countrycode=countrycode)) )
+            self.replace_filters.append( (re.compile('^(TEL;.*)(:00)(.*)'), Replacer.type_telint) )
+
     def type_lc(matchobj):
         return matchobj.group(1)+';TYPE='+matchobj.group(2).lower()
 
+    def type_tel(matchobj, countrycode):
+        return matchobj.group(1)+':+'+countrycode[0]+matchobj.group(2)[-1:]+matchobj.group(3).replace('-', '')
+
+    def type_telint(matchobj):
+        return matchobj.group(1)+':+'+matchobj.group(3).replace('-', '')
 
     def __call__(self, line):
         return self.replace(line)
@@ -134,6 +144,7 @@ def main(argv):
     parser.add_argument('--remove_card', action='append', help='remove vcards for which any line matches regex REMOVE, can be given multiple times')
     parser.add_argument('--remove_dollar', action='store_true', help='remove "$" in N and FN values')
     parser.add_argument('-p', '--prune_empty', action='store_true', help='remove vcards which have only FN but no additional fields')
+    parser.add_argument('--sanitize', action='append', help='Sanitize phone numbers and add country code Y. Numbers in Format 0XX will be changed to +YXX')
     args = parser.parse_args(argv)
 
     if args.outfile:
@@ -143,7 +154,7 @@ def main(argv):
 
     vcard = VCard(True if args.prune_empty else False)
     decoder = QuotedPrintableDecoder()
-    replace = Replacer()
+    replace = Replacer(args.sanitize if args.sanitize else None)
     if args.remove_dollar:
         replace.replace_filters.append( (re.compile('^(N|FN):([^$]+)\$'), '\\1:\\2') )
     remove_line = Remover(args.remove if args.remove else None)
